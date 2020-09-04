@@ -249,7 +249,6 @@ import org.eclipse.ui.views.IViewDescriptor;
 import org.eclipse.ui.views.IViewRegistry;
 import org.eclipse.ui.wizards.IWizardRegistry;
 import org.osgi.framework.ServiceRegistration;
-import org.osgi.service.event.EventHandler;
 import org.osgi.util.tracker.ServiceTracker;
 
 /**
@@ -1573,7 +1572,7 @@ public final class Workbench extends EventManager implements IWorkbench,
 	 *         canceled
 	 */
 	/* package */
-    boolean close(int returnCode, final boolean force) {
+	boolean close(int returnCode, final boolean force) {
 // RAP [fappel]: take care of the started flag
 //      this.returnCode = returnCode;
 //      final boolean[] ret = new boolean[1];
@@ -1587,7 +1586,7 @@ public final class Workbench extends EventManager implements IWorkbench,
                     ret[0] = busyClose(force);
                 }
             });
-            return ret[0];
+		return ret[0];
         } finally {
             started = false;
         }
@@ -2066,29 +2065,23 @@ public final class Workbench extends EventManager implements IWorkbench,
 			}
 		});
 
-		childrenEventHandler = new EventHandler() {
-
-      /** {@inheritDoc} */
-      @Override
-      public void handleEvent( org.osgi.service.event.Event event ) {
-      	if (application == event.getProperty(UIEvents.EventTags.ELEMENT)) {
-      		if (UIEvents.isREMOVE(event)) {
-      			for (Object removed : UIEvents.asIterable(event, UIEvents.EventTags.OLD_VALUE)) {
-      				MWindow window = (MWindow) removed;
-      				IEclipseContext windowContext = window.getContext();
-      				if (windowContext != null) {
-      					IWorkbenchWindow wwindow = windowContext.get(IWorkbenchWindow.class);
-      					if (wwindow != null) {
-      						fireWindowClosed(wwindow);
-      					}
-      				}
-      			}
-      		}
-      	}
-      }
-    };
-    eventBroker.subscribe(UIEvents.ElementContainer.TOPIC_CHILDREN, childrenEventHandler);
-		elementEventHandler = event -> {
+		eventBroker.subscribe(UIEvents.ElementContainer.TOPIC_CHILDREN, event -> {
+			if (application == event.getProperty(UIEvents.EventTags.ELEMENT)) {
+				if (UIEvents.isREMOVE(event)) {
+					for (Object removed : UIEvents.asIterable(event, UIEvents.EventTags.OLD_VALUE)) {
+						MWindow window = (MWindow) removed;
+						IEclipseContext windowContext = window.getContext();
+						if (windowContext != null) {
+							IWorkbenchWindow wwindow = windowContext.get(IWorkbenchWindow.class);
+							if (wwindow != null) {
+								fireWindowClosed(wwindow);
+							}
+						}
+					}
+				}
+			}
+		});
+		eventBroker.subscribe(UIEvents.ElementContainer.TOPIC_SELECTEDELEMENT, event -> {
 			if (application == event.getProperty(UIEvents.EventTags.ELEMENT)) {
 				if (UIEvents.EventTypes.SET.equals(event.getProperty(UIEvents.EventTags.TYPE))) {
 					MWindow window = (MWindow) event.getProperty(UIEvents.EventTags.NEW_VALUE);
@@ -2101,10 +2094,12 @@ public final class Workbench extends EventManager implements IWorkbench,
 					}
 				}
 			}
-		};
-    eventBroker.subscribe(UIEvents.ElementContainer.TOPIC_SELECTEDELEMENT, elementEventHandler);
+		});
 
-		toBeRenderedEventHandler = event -> {
+		// watch for parts' "toBeRendered" attribute being flipped to true, if
+		// they need to be rendered, then they need a corresponding 3.x
+		// reference
+		eventBroker.subscribe(UIEvents.UIElement.TOPIC_TOBERENDERED, event -> {
 			if (Boolean.TRUE.equals(event.getProperty(UIEvents.EventTags.NEW_VALUE))) {
 				Object element = event.getProperty(UIEvents.EventTags.ELEMENT);
 				if (element instanceof MPart) {
@@ -2112,8 +2107,7 @@ public final class Workbench extends EventManager implements IWorkbench,
 					createReference(part);
 				}
 			}
-};
-    eventBroker.subscribe(UIEvents.UIElement.TOPIC_TOBERENDERED, toBeRenderedEventHandler);
+});
 
 		// watch for parts' contexts being set, once they've been set, we need
 		// to inject the ViewReference/EditorReference into the context
@@ -2128,7 +2122,7 @@ public final class Workbench extends EventManager implements IWorkbench,
 			}
 		});
 
-		children2EventHandler = event -> {
+		eventBroker.subscribe(UIEvents.ElementContainer.TOPIC_CHILDREN, event -> {
 			Object element = event.getProperty(UIEvents.EventTags.ELEMENT);
 			if (!(element instanceof MApplication)) {
 				return;
@@ -2141,13 +2135,11 @@ public final class Workbench extends EventManager implements IWorkbench,
 							+ " was just removed", new Exception()); //$NON-NLS-1$
 				}
 			}
-		};
-    eventBroker.subscribe(UIEvents.ElementContainer.TOPIC_CHILDREN, children2EventHandler);
+		});
 
-		uiModelTopicBaseEventHandler = event -> { // //$NON-NLS-1$
+		eventBroker.subscribe(UIEvents.UIModelTopicBase + "/*", event -> { // //$NON-NLS-1$
 			applicationModelChanged = true;
-		};
-    eventBroker.subscribe(UIEvents.UIModelTopicBase + "/*", uiModelTopicBaseEventHandler);
+		});
 
 		boolean found = false;
 		List<MPartDescriptor> currentDescriptors = application.getDescriptors();
@@ -2980,6 +2972,8 @@ public final class Workbench extends EventManager implements IWorkbench,
 			}
 		}
 
+		final UISynchronizer synchronizer;
+
 		if (avoidDeadlock) {
 			UILockListener uiLockListener = new UILockListener(display);
 			Job.getJobManager().setLockListener(uiLockListener);
@@ -3240,15 +3234,6 @@ public final class Workbench extends EventManager implements IWorkbench,
 		if (tracker != null) {
 			tracker.close();
 		}
-		
-		eventBroker.unsubscribe( childrenEventHandler );
-		  eventBroker.unsubscribe( elementEventHandler );
-		  eventBroker.unsubscribe( toBeRenderedEventHandler );
-		  eventBroker.unsubscribe( children2EventHandler );
-		  eventBroker.unsubscribe( uiModelTopicBaseEventHandler );
-		  e4Context.dispose();
-		  clearListeners();
-		  this.synchronizer = null;
 	}
 
 	/**
@@ -3648,18 +3633,6 @@ public final class Workbench extends EventManager implements IWorkbench,
 	 * until {@link #initializeDefaultServices()} is called.
 	 */
 	private MenuSourceProvider menuSourceProvider;
-
-  private EventHandler childrenEventHandler;
-
-  private EventHandler elementEventHandler;
-
-  private EventHandler toBeRenderedEventHandler;
-
-  private EventHandler children2EventHandler;
-
-  private EventHandler uiModelTopicBaseEventHandler;
-
-  private UISynchronizer synchronizer;
 
 	/**
 	 * Adds the ids of a menu that is now showing to the menu source provider.
